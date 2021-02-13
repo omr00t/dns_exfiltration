@@ -18,9 +18,7 @@
 * A gif showing the process:
 * ![dns exfiltration](gif/dns_exfiltration.gif)
 # Requires python3.8+
-----
 * Since the server & client are using UDP protocol to transfer data, such a transfer process is not reliable, and therefore, files might not be transferred correctly when either the file being transferred is large or there is a traffic noise on the server. The delay between the byte blocks being sent can also affect the byte blocks order, which may corrupt the file being sent if one block of bytes gets received before the one that must be received first.
-----
 # TODO
 * Make the file sending process as reliable as possible.
 ----
