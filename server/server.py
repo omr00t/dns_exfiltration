@@ -4,7 +4,6 @@
 # omroot.io
 # LICENSE: GPLv3.0
 
-
 import re
 import sys
 import base64
@@ -16,6 +15,8 @@ import colorama
 from dnslib import DNSRecord
 from Crypto.Cipher import AES
 
+# Global vars:
+RANDOM_FILE_NAME = secrets.token_hex(5) + '.bin'
 
 # Colors:
 red   = colorama.Fore.RED
@@ -68,16 +69,16 @@ def decrypt(data):
     clear_text = PKCS7Encoder().decode(aes_decrypter.decrypt(base64.b32decode(data)))
     return clear_text
 
-# Globals:
-RANDOM_FILE_NAME = secrets.token_hex(5) + '.bin'
-
-def create_socket(addr, port):
+def create_socket(addr, port, TCP=False):
     """
     Creates a UDP socket.
     """
 
     try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        if(TCP):
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        else:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.bind((addr, port))
     except OSError as e:
         print(f"{red}Cannot bind to port {white}{port}{reset}{red}:{reset}", e)
@@ -86,12 +87,10 @@ def create_socket(addr, port):
 
 def save_data(data):
     """
-    A Wrapper to recover data.
+    A Wrapper to recover/decrypt & save data.
     """
 
     data = data.replace("-", "=")
-    # Remove the b' & '. because of an earlier str.
-    data = data[2:-1]
     data = decrypt(data)
     with open(RANDOM_FILE_NAME, 'ab') as f:
         f.write(data)
@@ -100,26 +99,48 @@ def save_data(data):
 def receive_info(s, v):
     """
     Parses the DNS request and takes the specific 
-    info we're interested in.
+    data we're interested in.
     """
 
-    byteData, addr = s.recvfrom(2048)
-    try:
-        msg = binascii.unhexlify(binascii.b2a_hex(byteData))
-        msg = DNSRecord.parse(msg)
-    except Exception as e:
-        print(e)
-        return
-    m = re.search(r'\;(\S+)\.mydomain\.tld', str(msg), re.MULTILINE)
-    if m:
-        received_data = m.group(1)
-        if v: print(f'{white}Received data:{reset}', received_data)
-        if(received_data == "EOF"):
-            global RANDOM_FILE_NAME
-            print(f"{white}File has been saved as{reset} {yellow}{RANDOM_FILE_NAME}{reset}{white} .{reset}")
-            RANDOM_FILE_NAME = secrets.token_hex(5) + '.bin'
+    global RANDOM_FILE_NAME
+
+    # Whether it's a TCP or UDP DNS request, parse it accordingly.
+    if(s.type == 1):
+        s.listen(1)
+        conn, _ = s.accept()
+        byteData = conn.recv(2048)
+
+        # Grap only the info that we're interested in.
+        try:
+            received_data = byteData[15:byteData.index(b'\x08')]
+        except ValueError:
+            received_data = None
             return
-        save_data(received_data)
+        received_data = received_data.decode()
+        if received_data:
+            if v: print(f'{white}Received data:{reset}', received_data)
+            if(received_data == "EOF"):
+                print(f"{white}File has been saved as{reset} {yellow}{RANDOM_FILE_NAME}{reset}{white} .{reset}")
+                RANDOM_FILE_NAME = secrets.token_hex(5) + '.bin'
+                return
+            save_data(received_data)
+    else:
+        byteData, addr = s.recvfrom(2048)
+        try:
+            msg = binascii.unhexlify(binascii.b2a_hex(byteData))
+            msg = DNSRecord.parse(msg)
+        except Exception as e:
+            print(e)
+            return
+        m = re.search(r'\;(\S+)\.mydomain\.tld', str(msg), re.MULTILINE)
+        if m:
+            received_data = m.group(1)
+            if v: print(f'{white}Received data:{reset}', received_data)
+            if(received_data == "EOF"):
+                print(f"{white}File has been saved as{reset} {yellow}{RANDOM_FILE_NAME}{reset}{white} .{reset}")
+                RANDOM_FILE_NAME = secrets.token_hex(5) + '.bin'
+                return
+            save_data(received_data)
 
 def main():
     parser = argparse.ArgumentParser(description="A server to receive files send by a client through DNS") 
@@ -129,15 +150,24 @@ def main():
                     help='listening address.')
     parser.add_argument('-p', '--port', action='store', type=int, default=53, dest='dns_port',
                     help='DNS port.')
+    parser.add_argument('--tcp', action='store_true', dest='tcp', help='DNS through TCP.')
+
     args = parser.parse_args()
     
-    s = create_socket(args.addr, args.dns_port)
-    print(f"{white}Start listening for DNS requests{reset} {cyan}{args.addr}{reset}{white}:{reset}{cyan}{args.dns_port}{reset}")
+    if args.tcp:
+        s = create_socket(args.addr, args.dns_port, args.tcp)
+        # No delay in case it's TCP.
+        args.delay = 0
+    else: 
+        s = create_socket(args.addr, args.dns_port)
+    print(f"{white}Start listening for DNS requests{reset} {cyan}{args.addr}{reset}{white}:{reset}{cyan}{args.dns_port}",
+            f"({'TCP' if args.tcp else 'UDP'}){reset}")
     while True:
         try:
             receive_info(s, args.verbose)
         except KeyboardInterrupt:
             print(f"\n{white}Exiting{reset}")
+            s.close()
             sys.exit(0)
 
 if __name__ == "__main__":

