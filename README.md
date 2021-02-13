@@ -10,7 +10,7 @@
 	```
 	python3 server.py -v
 	```
-* Note that since DNS server is usually running on privileged port(53), the `server.py` needs root permissions.
+* Note that since DNS server is usually running on privileged port `53`, the `server.py` needs root permissions.
 * Client:
 	```
 	python3 client.py -n <YOUR DNS SERVER> -f /path/to/file
